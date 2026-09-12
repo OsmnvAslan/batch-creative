@@ -8,7 +8,7 @@ export const metadata: Metadata = {
     "Turn a set of product photos and one reference image into a consistent series of social posts, streamed as they generate.",
 };
 
-const REPO_URL = "https://github.com/OsmnvAslan/image-test";
+const REPO_URL = "https://github.com/OsmnvAslan/batch-creative";
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
