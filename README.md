@@ -30,11 +30,13 @@ posts**, and watch cards fill in progressively.
 | Var | Default | Effect |
 |-----|---------|--------|
 | `OPENROUTER_API_KEY` | _(unset)_ | Enables **vision** captioning of references + products (OpenRouter). Without it, a deterministic style template + generic product descriptor are used. |
-| `OPENROUTER_VISION_MODEL` | `google/gemma-4-31b-it:free` | Free vision model id (verified live 2026-06-23). |
-| `TOGETHER_API_KEY` | _(unset)_ | Adds Together AI FLUX as a real second image provider for failover. Without it, the failover provider is a deterministic mock. |
+| `OPENROUTER_VISION_MODEL` | `nvidia/nemotron-nano-12b-v2-vl:free` | Vision model id on OpenRouter. |
+| `TOGETHER_API_KEY` | _(unset)_ | Adds Together AI FLUX as a second image provider for failover. |
+| `ENABLE_MOCK_PROVIDER` | `false` | Appends an offline placeholder provider to the chain (demo / tests). |
+| `MAX_PRODUCTS` / `MAX_FILE_BYTES` | `12` / `10 MB` | Upload limits. |
 | `MAX_CONCURRENCY` | `3` | Max products generated at once (fan-out pool limit). |
 
-Dev mode: `npm run dev`. Typecheck: `npm run typecheck`.
+Dev mode: `npm run dev`. Checks: `npm run check` (typecheck + lint + tests).
 
 > **Run target is a single local process (`next start`).** State lives in memory and
 > SSE streams are long-lived — this is **not** serverless-compatible (Vercel would
@@ -62,7 +64,7 @@ Browser ◄──SSE /api/batch/[id]/stream (init → job* → done)────
   **once** and reused **verbatim** for every product. `describeProduct` supplies the
   per-product subject. Same style spine, different subject per card.
 - **Reliability**: each product is generated via an ordered provider list
-  (`pollinations → together? → mock`); each provider gets retries with exponential
+  (`pollinations → together? → mock?`); each provider gets retries with exponential
   backoff + jitter; on exhaustion it fails over to the next. One product (or
   provider) failing never stops the others — the batch always reaches `complete`.
 - **Progressive delivery**: Server-Sent Events. The POST returns immediately with a
@@ -86,9 +88,10 @@ Browser ◄──SSE /api/batch/[id]/stream (init → job* → done)────
 Force a product to fail at the primary provider and watch it fail over:
 
 ```bash
-GEN_FORCE_FAIL=prod-bottle.jpg MAX_CONCURRENCY=3 npm start
-# that product's card will show provider=mock, attempts=4 (3 pollinations tries + failover),
-# while siblings complete normally and the batch still reaches "complete".
+GEN_FORCE_FAIL=bottle.jpg ENABLE_MOCK_PROVIDER=true npm start
+# bottle.jpg fails fast on Pollinations (non-retryable) and fails over to the mock:
+# its card shows provider=mock, attempts=2, while siblings complete normally.
+# Without ENABLE_MOCK_PROVIDER the card is reported as failed instead.
 ```
 
 ---
