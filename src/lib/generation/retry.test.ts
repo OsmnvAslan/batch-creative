@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ProviderError, isRetryable, withBackoff } from "./retry";
+import { ProviderError, isRetryable, parseRetryAfter, retryDelay, withBackoff } from "./retry";
 
 const noSleep = () => Promise.resolve();
 
@@ -71,5 +71,34 @@ describe("withBackoff", () => {
     await expect(withBackoff(fn, { retries: 5, baseMs: 1, sleep })).rejects.toThrow("HTTP 401");
     expect(fn).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
+  });
+});
+
+describe("retryDelay", () => {
+  const noJitter = () => 0;
+
+  it("is plain exponential backoff for ordinary transient errors", () => {
+    const err = new ProviderError("HTTP 503", { status: 503 });
+    expect(retryDelay(err, 1, 100, noJitter)).toBe(100);
+    expect(retryDelay(err, 2, 100, noJitter)).toBe(200);
+    expect(retryDelay(new Error("x"), 3, 100, noJitter)).toBe(400);
+  });
+
+  it("waits at least a few seconds on 429 and honours Retry-After", () => {
+    expect(retryDelay(new ProviderError("HTTP 429", { status: 429 }), 1, 100, noJitter)).toBe(3000);
+    const withHeader = new ProviderError("HTTP 429", { status: 429, retryAfterMs: 7000 });
+    expect(retryDelay(withHeader, 1, 100, noJitter)).toBe(7000);
+    const huge = new ProviderError("HTTP 503", { status: 503, retryAfterMs: 120_000 });
+    expect(retryDelay(huge, 1, 100, noJitter)).toBe(30_000);
+  });
+});
+
+describe("parseRetryAfter", () => {
+  it("accepts seconds or an HTTP date", () => {
+    expect(parseRetryAfter(null)).toBeUndefined();
+    expect(parseRetryAfter("5")).toBe(5000);
+    expect(parseRetryAfter("garbage")).toBeUndefined();
+    const now = Date.parse("2026-01-01T00:00:00Z");
+    expect(parseRetryAfter("Thu, 01 Jan 2026 00:00:10 GMT", now)).toBe(10_000);
   });
 });

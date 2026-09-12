@@ -1,6 +1,7 @@
 import type { GenerateInput, GenerateResult, ImageProvider } from "@/lib/types";
 import { withBackoff } from "./retry";
 import { CircuitBreaker, globalBreaker } from "./breaker";
+import { SemaphoreRegistry, globalSemaphores } from "./semaphore";
 import { GeminiImageProvider } from "./providers/gemini";
 import { PollinationsProvider } from "./providers/pollinations";
 import { TogetherProvider } from "./providers/together";
@@ -10,7 +11,8 @@ import { MockProvider } from "./providers/mock";
 //
 //   for each provider in order:
 //     skip if its circuit is open
-//     try up to (1 + RETRIES) times with exponential backoff (retryable errors only)
+//     try up to (1 + RETRIES) times with exponential backoff (retryable errors only),
+//       each call holding a slot in the provider's concurrency semaphore
 //     on exhaustion -> record a breaker failure, move to the next provider
 //   if every provider fails -> GenerationError
 //
@@ -18,7 +20,7 @@ import { MockProvider } from "./providers/mock";
 // result was to obtain (e.g. "4 tries" = 3 on the primary + 1 on the failover).
 
 const RETRIES = 2;
-const BASE_MS = 400;
+const BASE_MS = 800;
 
 export class GenerationError extends Error {
   readonly failures: string[];
@@ -55,6 +57,7 @@ export function providersFromEnv(env: Record<string, string | undefined> = proce
 export interface GenerateOptions {
   providers?: ImageProvider[];
   breaker?: CircuitBreaker;
+  semaphores?: SemaphoreRegistry;
   retries?: number;
   baseMs?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -66,6 +69,7 @@ export async function generatePost(
 ): Promise<GenerateResult> {
   const providers = opts.providers ?? providersFromEnv();
   const breaker = opts.breaker ?? globalBreaker();
+  const semaphores = opts.semaphores ?? globalSemaphores();
   if (providers.length === 0) {
     throw new GenerationError("No image providers configured", []);
   }
@@ -78,8 +82,11 @@ export async function generatePost(
       failures.push(`${provider.name}: skipped (circuit open)`);
       continue;
     }
+    const call = provider.concurrency
+      ? () => semaphores.for(provider.name, provider.concurrency!).run(() => provider.generate(input))
+      : () => provider.generate(input);
     try {
-      const imageDataUrl = await withBackoff(() => provider.generate(input), {
+      const imageDataUrl = await withBackoff(call, {
         retries: opts.retries ?? RETRIES,
         baseMs: opts.baseMs ?? BASE_MS,
         sleep: opts.sleep,

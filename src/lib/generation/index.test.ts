@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GenerateInput, ImageProvider } from "@/lib/types";
 import { GenerationError, generatePost, providersFromEnv } from "./index";
 import { ProviderError } from "./retry";
+import { SemaphoreRegistry } from "./semaphore";
 
 const input: GenerateInput = {
   product: { name: "sneaker.jpg", bytes: Buffer.from(""), mime: "image/jpeg" },
@@ -83,6 +84,30 @@ describe("generatePost", () => {
 
   it("throws when no providers are configured", async () => {
     await expect(generatePost(input, { providers: [] })).rejects.toBeInstanceOf(GenerationError);
+  });
+});
+
+describe("generatePost concurrency", () => {
+  it("serialises calls to a provider that declares concurrency 1, across parallel generatePost calls", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const serial: ImageProvider = {
+      name: "serial",
+      kind: "text-to-image",
+      concurrency: 1,
+      generate: async () => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise((r) => setTimeout(r, 2));
+        inFlight--;
+        return "data:ok";
+      },
+    };
+    const semaphores = new SemaphoreRegistry();
+    await Promise.all(
+      Array.from({ length: 4 }, () => generatePost(input, { ...opts, providers: [serial], semaphores })),
+    );
+    expect(peak).toBe(1);
   });
 });
 

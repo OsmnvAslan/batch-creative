@@ -83,6 +83,8 @@ export interface ImageProvider {
   readonly name: string;
   /** Whether the provider consumes the uploaded pixels or only the text prompt. */
   readonly kind: ProviderKind;
+  /** Max in-flight requests to this provider across all batches (default: unlimited). */
+  readonly concurrency?: number;
   /** Returns an image data URL, or throws (ideally a ProviderError). */
   generate(input: GenerateInput): Promise<string>;
 }

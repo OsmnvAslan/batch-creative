@@ -1,5 +1,5 @@
 import type { GenerateInput, ImageProvider } from "@/lib/types";
-import { ProviderError } from "../retry";
+import { ProviderError, parseRetryAfter } from "../retry";
 import { fetchWithTimeout } from "./shared";
 
 // Gemini image model (image-to-image). The primary provider whenever a key is
@@ -84,6 +84,7 @@ export class GeminiImageProvider implements ImageProvider {
     if (!res.ok) {
       throw new ProviderError(`HTTP ${res.status}${json.error?.message ? `: ${json.error.message}` : ""}`, {
         status: res.status,
+        retryAfterMs: parseRetryAfter(res.headers.get("retry-after")),
       });
     }
 
