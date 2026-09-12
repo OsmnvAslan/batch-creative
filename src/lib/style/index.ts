@@ -62,7 +62,7 @@ export async function buildStyleFingerprint(
  */
 export async function describeProduct(
   productImage: Buffer,
-  productName = ""
+  productName: string
 ): Promise<string> {
   const fallback = subjectFromName(productName);
   if (!productImage) return fallback;

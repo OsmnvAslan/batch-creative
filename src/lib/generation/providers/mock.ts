@@ -1,19 +1,8 @@
-import { GenerateInput, ImageProvider } from "@/lib/types";
+import type { GenerateInput, ImageProvider } from "@/lib/types";
+import { stableSeed } from "./shared";
 
-// MockProvider — FINAL FALLBACK (PLAN §4.3 Provider B fallback). Always active.
-// Never makes network calls. Returns a deterministic placeholder SVG (hash-derived
-// background color + the productName) as a data:image/svg+xml;base64 URL. Guarantees
-// the batch never hard-fails in a dry run and makes failover visibly demonstrable.
-// Text-only: input.productImage is unused (scoped free-path behavior).
-
-// Deterministic hue from productName -> stable per-product color.
-function hueFromName(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) {
-    h = (h * 31 + s.charCodeAt(i)) | 0;
-  }
-  return Math.abs(h) % 360;
-}
+// Deterministic offline provider: a labelled SVG placeholder. Opt-in via
+// ENABLE_MOCK_PROVIDER=true. Useful for demos without network and for tests.
 
 function escapeXml(s: string): string {
   return s
@@ -24,22 +13,24 @@ function escapeXml(s: string): string {
     .replace(/'/g, "&apos;");
 }
 
-export class MockProvider implements ImageProvider {
-  name = "mock";
-
-  async generate(input: GenerateInput): Promise<string> {
-    const hue = hueFromName(input.productName);
-    const bg = `hsl(${hue}, 60%, 45%)`;
-    const accent = `hsl(${(hue + 40) % 360}, 70%, 75%)`;
-    const label = escapeXml(input.productName || "Product");
-
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+export function mockSvg(productName: string): string {
+  const hue = stableSeed(productName) % 360;
+  const bg = `hsl(${hue}, 60%, 45%)`;
+  const accent = `hsl(${(hue + 40) % 360}, 70%, 75%)`;
+  const label = escapeXml(productName || "Product");
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <rect width="1024" height="1024" fill="${bg}"/>
   <circle cx="512" cy="430" r="220" fill="${accent}" opacity="0.85"/>
   <text x="512" y="780" font-family="sans-serif" font-size="64" font-weight="bold" fill="#ffffff" text-anchor="middle">${label}</text>
-  <text x="512" y="850" font-family="sans-serif" font-size="32" fill="#ffffff" opacity="0.8" text-anchor="middle">mock fallback</text>
+  <text x="512" y="850" font-family="sans-serif" font-size="32" fill="#ffffff" opacity="0.8" text-anchor="middle">mock provider</text>
 </svg>`;
+}
 
+export class MockProvider implements ImageProvider {
+  readonly name = "mock";
+
+  async generate(input: GenerateInput): Promise<string> {
+    const svg = mockSvg(input.productName);
     return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
   }
 }

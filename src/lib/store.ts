@@ -1,24 +1,27 @@
-// In-memory batch store + per-batch event emitter (PLAN.md §6).
+// In-memory batch store with a per-batch event emitter for SSE fan-out.
 //
-// A single `Map<batchId, Batch>` holds all batch state for the life of the
-// process (lost on restart — documented scope cut). Each batch gets its own
-// Node EventEmitter so SSE clients can subscribe to job/done events.
-//
-// Mutations go through updateJob/completeBatch, which both mutate the stored
-// Batch AND emit a StreamEvent so subscribers see every state change.
+// Batches are evicted after BATCH_TTL_MS (default 1h) so a long-running process
+// does not accumulate base64 images forever. Single-process only by design.
 
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import type { Batch, ProductJob, StreamEvent } from "@/lib/types";
 
+const DEFAULT_TTL_MS = 60 * 60 * 1000;
+const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
 const batches = new Map<string, Batch>();
 const emitters = new Map<string, EventEmitter>();
+
+function ttlMs(): number {
+  const raw = Number(process.env.BATCH_TTL_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TTL_MS;
+}
 
 function emitterFor(batchId: string): EventEmitter {
   let emitter = emitters.get(batchId);
   if (!emitter) {
     emitter = new EventEmitter();
-    // Many SSE clients may subscribe to one batch; lift the default cap.
     emitter.setMaxListeners(0);
     emitters.set(batchId, emitter);
   }
@@ -26,23 +29,20 @@ function emitterFor(batchId: string): EventEmitter {
 }
 
 function emit(batchId: string, event: StreamEvent): void {
-  emitterFor(batchId).emit("event", event);
+  emitters.get(batchId)?.emit("event", event);
 }
 
-/**
- * Create a batch from a list of jobs + the shared style fingerprint and store it.
- * Caller is responsible for kicking off the fan-out work.
- */
-export function createBatch(
-  jobs: ProductJob[],
-  styleFingerprint: string,
-): Batch {
+export function newId(): string {
+  return randomUUID();
+}
+
+export function createBatch(jobs: ProductJob[], now = Date.now()): Batch {
   const batch: Batch = {
-    id: randomUUID(),
-    status: "running",
-    styleFingerprint,
+    id: newId(),
+    status: "preparing",
+    styleFingerprint: "",
     jobs,
-    createdAt: Date.now(),
+    createdAt: now,
   };
   batches.set(batch.id, batch);
   return batch;
@@ -52,26 +52,23 @@ export function getBatch(id: string): Batch | undefined {
   return batches.get(id);
 }
 
-/**
- * Mutate a single job in place, then emit a `{type:"job", job}` event so any
- * SSE subscriber forwards the new state. No-op if batch/job is unknown.
- */
-export function updateJob(
-  batchId: string,
-  jobId: string,
-  patch: Partial<ProductJob>,
-): void {
+/** Record the shared style fingerprint and move the batch to "running". */
+export function setStyle(batchId: string, styleFingerprint: string): void {
   const batch = batches.get(batchId);
   if (!batch) return;
-  const job = batch.jobs.find((j) => j.id === jobId);
-  if (!job) return;
+  batch.styleFingerprint = styleFingerprint;
+  batch.status = "running";
+  emit(batchId, { type: "style", styleFingerprint });
+}
+
+export function updateJob(batchId: string, jobId: string, patch: Partial<ProductJob>): void {
+  const batch = batches.get(batchId);
+  const job = batch?.jobs.find((j) => j.id === jobId);
+  if (!batch || !job) return;
   Object.assign(job, patch);
   emit(batchId, { type: "job", job });
 }
 
-/**
- * Mark the batch complete and emit a terminal `{type:"done", batchId}` event.
- */
 export function completeBatch(batchId: string): void {
   const batch = batches.get(batchId);
   if (!batch) return;
@@ -79,10 +76,7 @@ export function completeBatch(batchId: string): void {
   emit(batchId, { type: "done", batchId });
 }
 
-/**
- * Subscribe to a batch's stream events. Returns an unsubscribe function.
- * Returns undefined if the batch id is unknown.
- */
+/** Subscribe to a batch's events. Returns an unsubscribe fn, or undefined if unknown. */
 export function subscribe(
   batchId: string,
   listener: (event: StreamEvent) => void,
@@ -95,8 +89,29 @@ export function subscribe(
   };
 }
 
-// Helper id generator for jobs (createBatch uses randomUUID for batch ids;
-// route uses this for job ids).
-export function newId(): string {
-  return randomUUID();
+/** Drop batches older than the TTL. Returns the number evicted. */
+export function evictExpired(now = Date.now(), ttl = ttlMs()): number {
+  let evicted = 0;
+  for (const [id, batch] of batches) {
+    if (now - batch.createdAt > ttl) {
+      batches.delete(id);
+      emitters.get(id)?.removeAllListeners();
+      emitters.delete(id);
+      evicted++;
+    }
+  }
+  return evicted;
+}
+
+/** Test helper: clear everything. */
+export function resetStore(): void {
+  batches.clear();
+  for (const e of emitters.values()) e.removeAllListeners();
+  emitters.clear();
+}
+
+// Periodic sweep. `unref` so the timer never keeps the process alive.
+if (process.env.NODE_ENV !== "test") {
+  const timer = setInterval(() => evictExpired(), SWEEP_INTERVAL_MS);
+  timer.unref?.();
 }

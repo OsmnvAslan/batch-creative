@@ -1,48 +1,53 @@
-// Shared contract types — OWNED BY TEAM LEAD. Agents import from here, read-only.
-// Mirrors PLAN.md §4.1. Do not edit in agent zones.
+// Shared contract types used by the API routes, the generation/style modules
+// and the UI.
 
 export type JobStatus = "pending" | "running" | "done" | "failed";
 
 export interface ProductJob {
-  id: string; // job id (index-based per batch)
-  productName: string; // filename or "Product N"
+  id: string;
+  productName: string;
   status: JobStatus;
-  imageDataUrl?: string; // result image as data URL (present iff status === 'done')
-  headline?: string; // short post headline, overlaid on the image (present iff 'done')
-  caption?: string; // 1-line post caption, shown under the image (present iff 'done')
-  provider?: string; // which provider succeeded ("pollinations" | "together" | "mock")
+  imageDataUrl?: string; // present iff status === "done"
+  headline?: string; // short post headline (done)
+  caption?: string; // one-line post caption (done)
+  provider?: string; // provider that produced the image (done)
   attempts: number; // total generation attempts across providers
-  error?: string; // present iff status === 'failed'
+  error?: string; // present iff status === "failed"
 }
+
+export type BatchStatus = "preparing" | "running" | "complete";
 
 export interface Batch {
   id: string;
-  status: "running" | "complete";
-  styleFingerprint: string; // the shared style descriptor reused for every product
+  status: BatchStatus;
+  /** Shared style descriptor derived from the references; empty while "preparing". */
+  styleFingerprint: string;
   jobs: ProductJob[];
   createdAt: number;
 }
 
-// ---- SSE event envelope (PLAN.md §4.2) ----
+// ---- SSE events (GET /api/batch/[id]/stream) ----
 export type StreamEvent =
   | { type: "init"; batch: Batch }
+  | { type: "style"; styleFingerprint: string }
   | { type: "job"; job: ProductJob }
   | { type: "done"; batchId: string };
 
-// ---- Generation module contract (PLAN.md §4.3) ----
+// ---- Generation module ----
 export interface GenerateInput {
-  productImage: Buffer; // raw product image bytes (UNUSED on the free text->image path)
+  productImage: Buffer;
   productName: string;
-  stylePrompt: string; // full per-product prompt from the Style module
+  stylePrompt: string;
 }
 
 export interface GenerateResult {
-  imageDataUrl: string; // generated post as data URL
-  provider: string; // provider that succeeded
-  attempts: number; // attempts across all providers
+  imageDataUrl: string;
+  provider: string;
+  attempts: number;
 }
 
 export interface ImageProvider {
-  name: string;
-  generate(input: GenerateInput): Promise<string>; // returns image data URL or throws
+  readonly name: string;
+  /** Returns an image data URL, or throws (ideally a ProviderError). */
+  generate(input: GenerateInput): Promise<string>;
 }

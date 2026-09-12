@@ -10,6 +10,8 @@
 // (rate-limited upstream) and the llama/qwen free vision tiers were retired (404).
 // Free vision endpoints are flaky (429 / "idle timeout"), so visionCaption retries
 // a few times before letting the caller fall back. Override via OPENROUTER_VISION_MODEL.
+import { detectImageMime } from "@/lib/validation";
+
 const DEFAULT_MODEL = "nvidia/nemotron-nano-12b-v2-vl:free";
 
 const ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
@@ -26,22 +28,8 @@ export function getApiKey(): string | undefined {
   return key && key.trim() ? key.trim() : undefined;
 }
 
-// Sniff magic bytes for PNG vs JPEG; default to jpeg.
-function detectMime(buf: Buffer): string {
-  if (
-    buf.length >= 8 &&
-    buf[0] === 0x89 &&
-    buf[1] === 0x50 &&
-    buf[2] === 0x4e &&
-    buf[3] === 0x47
-  ) {
-    return "image/png";
-  }
-  return "image/jpeg";
-}
-
 export function toDataUrl(buf: Buffer): string {
-  const mime = detectMime(buf);
+  const mime = detectImageMime(buf) ?? "image/jpeg";
   return `data:${mime};base64,${buf.toString("base64")}`;
 }
 
@@ -69,6 +57,7 @@ export async function visionCaption(
       return await singleCall(key, content);
     } catch (err) {
       lastErr = err;
+      if (!isRetryable(err)) break;
       if (attempt < MAX_TRIES) {
         await sleep(RETRY_BASE_MS * attempt); // linear backoff: 1.2s, 2.4s
       }
@@ -96,12 +85,18 @@ export async function textCompletion(prompt: string): Promise<string> {
       return await singleCall(key, content);
     } catch (err) {
       lastErr = err;
+      if (!isRetryable(err)) break;
       if (attempt < MAX_TRIES) await sleep(RETRY_BASE_MS * attempt);
     }
   }
   throw lastErr instanceof Error
     ? lastErr
     : new Error("OpenRouter text call failed");
+}
+
+function isRetryable(err: unknown): boolean {
+  const flag = (err as { retryable?: boolean } | null)?.retryable;
+  return flag !== false;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -132,7 +127,9 @@ async function singleCall(
     });
 
     if (!res.ok) {
-      throw new Error(`OpenRouter HTTP ${res.status}`);
+      const err = new Error(`OpenRouter HTTP ${res.status}`) as Error & { retryable?: boolean };
+      err.retryable = res.status === 429 || res.status >= 500;
+      throw err;
     }
 
     const data: unknown = await res.json();

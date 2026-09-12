@@ -1,29 +1,24 @@
-// POST /api/batch — create + start a batch (PLAN.md §4.2, §3).
-//
-// Parses multipart/form-data (products[], references[]), derives ONE shared
-// style fingerprint from the reference(s), creates one job per product, then
-// FIRES the fan-out work WITHOUT awaiting it so the POST returns immediately
-// with { batchId, productCount }. The async work runs jobs through a
-// concurrency pool; each job's failure is isolated (per-job try/catch) so a
-// failing product never stops its siblings.
+// POST /api/batch — validate the upload, create the batch, start the work in the
+// background and return { batchId, productCount } immediately.
 
 import { NextResponse } from "next/server";
+import { startBatch } from "@/lib/orchestrator";
 import {
-  buildStyleFingerprint,
-  describeProduct,
-  buildProductPrompt,
-  writeCaption,
-} from "@/lib/style";
-import { generatePost } from "@/lib/generation";
-import { createBatch, updateJob, completeBatch, newId } from "@/lib/store";
-import { runPool, defaultConcurrency } from "@/lib/pool";
-import type { ProductJob } from "@/lib/types";
+  validateCounts,
+  validateImage,
+  ValidationError,
+  type UploadedImage,
+} from "@/lib/validation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-async function toBuffer(file: File): Promise<Buffer> {
-  return Buffer.from(await file.arrayBuffer());
+async function readImages(files: File[], fallbackLabel: string): Promise<UploadedImage[]> {
+  return Promise.all(
+    files.map(async (file, i) =>
+      validateImage(file.name || `${fallbackLabel} ${i + 1}`, Buffer.from(await file.arrayBuffer())),
+    ),
+  );
 }
 
 export async function POST(req: Request) {
@@ -31,101 +26,26 @@ export async function POST(req: Request) {
   try {
     form = await req.formData();
   } catch {
-    return NextResponse.json(
-      { error: "Expected multipart/form-data" },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "Expected multipart/form-data" }, { status: 400 });
   }
 
-  const products = form.getAll("products").filter((v): v is File => v instanceof File);
-  const references = form.getAll("references").filter((v): v is File => v instanceof File);
+  const productFiles = form.getAll("products").filter((v): v is File => v instanceof File);
+  const referenceFiles = form.getAll("references").filter((v): v is File => v instanceof File);
 
-  // ---- Validation (PLAN §4.2): >=1 product, 1..2 references ----
-  if (products.length === 0) {
-    return NextResponse.json(
-      { error: "At least one product image is required" },
-      { status: 400 },
-    );
-  }
-  if (references.length === 0) {
-    return NextResponse.json(
-      { error: "At least one reference image is required" },
-      { status: 400 },
-    );
-  }
-  if (references.length > 2) {
-    return NextResponse.json(
-      { error: "At most two reference images are allowed" },
-      { status: 400 },
-    );
-  }
+  try {
+    validateCounts(productFiles.length, referenceFiles.length);
+    const [products, references] = await Promise.all([
+      readImages(productFiles, "Product"),
+      readImages(referenceFiles, "Reference"),
+    ]);
 
-  // Convert all files to Buffers up front. These Buffers are captured by the
-  // fire-and-forget closure below and stay alive for the duration of the work.
-  const refBuffers = await Promise.all(references.map(toBuffer));
-  const productBuffers = await Promise.all(products.map(toBuffer));
-  const productNames = products.map((f, i) => f.name || `Product ${i + 1}`);
-
-  // ONE shared style fingerprint per batch (consistency axis).
-  const fingerprint = await buildStyleFingerprint(refBuffers);
-
-  // One job per product, all pending.
-  const jobs: ProductJob[] = productBuffers.map((_buf, i) => ({
-    id: newId(),
-    productName: productNames[i],
-    status: "pending",
-    attempts: 0,
-  }));
-
-  const batch = createBatch(jobs, fingerprint);
-
-  // ---- Fan-out (fire-and-forget): do NOT await, so POST returns immediately.
-  // Each product runs through the pool; per-job try/catch isolates failures so
-  // a failing job never stops its siblings. When all jobs are terminal we mark
-  // the batch complete (emits the `done` event).
-  const limit = defaultConcurrency();
-  void runPool(productBuffers, limit, async (buf, i) => {
-    const job = jobs[i];
-    updateJob(batch.id, job.id, { status: "running" });
-    try {
-      const desc = await describeProduct(buf, productNames[i]);
-      const prompt = buildProductPrompt(fingerprint, desc);
-      // Image and social copy are independent — run them concurrently so the
-      // caption never adds latency to the critical path.
-      const [result, copy] = await Promise.all([
-        generatePost({
-          productImage: buf,
-          productName: productNames[i],
-          stylePrompt: prompt,
-        }),
-        writeCaption(desc, fingerprint, productNames[i]),
-      ]);
-      updateJob(batch.id, job.id, {
-        status: "done",
-        imageDataUrl: result.imageDataUrl,
-        headline: copy.headline,
-        caption: copy.caption,
-        provider: result.provider,
-        attempts: result.attempts,
-      });
-    } catch (e) {
-      // generatePost essentially never throws (mock is the last provider), but
-      // be safe: isolate the failure to this one card.
-      updateJob(batch.id, job.id, {
-        status: "failed",
-        error: String(e),
-      });
+    const { batch } = startBatch({ products, references });
+    return NextResponse.json({ batchId: batch.id, productCount: batch.jobs.length });
+  } catch (err) {
+    if (err instanceof ValidationError) {
+      return NextResponse.json({ error: err.message }, { status: 400 });
     }
-  })
-    .catch(() => {
-      // Pool-level safety net — individual jobs already handle their own errors.
-    })
-    .finally(() => {
-      completeBatch(batch.id);
-    });
-
-  return NextResponse.json({
-    batchId: batch.id,
-    productCount: jobs.length,
-  });
+    console.error("POST /api/batch failed", err);
+    return NextResponse.json({ error: "Failed to start batch" }, { status: 500 });
+  }
 }

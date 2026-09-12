@@ -1,10 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Batch, ProductJob, StreamEvent } from "@/lib/types";
+import type { ProductJob, StreamEvent } from "@/lib/types";
 import UploadArea, { type SelectedFile } from "@/components/UploadArea";
 import ResultCard from "@/components/ResultCard";
-import SubmissionWriteup from "@/components/SubmissionWriteup";
 
 type Phase = "idle" | "submitting" | "streaming" | "complete";
 
@@ -20,17 +19,22 @@ export default function Page() {
   const [connectionNote, setConnectionNote] = useState<string | null>(null);
 
   const esRef = useRef<EventSource | null>(null);
-  const reconnectedRef = useRef(false);
-  const batchIdRef = useRef<string | null>(null);
+  const filesRef = useRef<{ products: SelectedFile[]; references: SelectedFile[] }>({
+    products: [],
+    references: [],
+  });
+  useEffect(() => {
+    filesRef.current = { products, references };
+  }, [products, references]);
 
-  // ---- cleanup of object URLs + EventSource on unmount ----
+  // Release object URLs + close the stream on unmount.
   useEffect(() => {
     return () => {
       esRef.current?.close();
+      const { products, references } = filesRef.current;
       products.forEach((p) => URL.revokeObjectURL(p.url));
       references.forEach((r) => URL.revokeObjectURL(r.url));
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ---- file selection helpers ----
@@ -75,8 +79,12 @@ export default function Page() {
     });
   };
 
-  // ---- SSE handling: seed grid from init, update card by job.id ----
+  // SSE: `init` seeds the grid with the full snapshot, `style` fills in the
+  // fingerprint, `job` replaces one card, `done` closes. EventSource reconnects
+  // on its own after a drop and the server re-sends a full snapshot, so no
+  // client-side reconnect bookkeeping is needed.
   const openStream = useCallback((batchId: string) => {
+    esRef.current?.close();
     const es = new EventSource(`/api/batch/${batchId}/stream`);
     esRef.current = es;
 
@@ -88,39 +96,34 @@ export default function Page() {
         return;
       }
 
-      if (evt.type === "init") {
-        // Seed the grid from the full batch state.
-        setStyleFingerprint(evt.batch.styleFingerprint);
-        setJobs(evt.batch.jobs);
-        setPhase(evt.batch.status === "complete" ? "complete" : "streaming");
-        setConnectionNote(null);
-      } else if (evt.type === "job") {
-        // Update THAT card in place, matched by job.id.
-        setJobs((prev) =>
-          prev.map((j) => (j.id === evt.job.id ? evt.job : j))
-        );
-      } else if (evt.type === "done") {
-        setPhase("complete");
-        es.close();
-        if (esRef.current === es) esRef.current = null;
+      switch (evt.type) {
+        case "init":
+          setStyleFingerprint(evt.batch.styleFingerprint);
+          setJobs(evt.batch.jobs);
+          setPhase(evt.batch.status === "complete" ? "complete" : "streaming");
+          setConnectionNote(null);
+          break;
+        case "style":
+          setStyleFingerprint(evt.styleFingerprint);
+          break;
+        case "job": {
+          const job = evt.job;
+          setJobs((prev) => prev.map((j) => (j.id === job.id ? job : j)));
+          break;
+        }
+        case "done":
+          setPhase("complete");
+          es.close();
+          if (esRef.current === es) esRef.current = null;
+          break;
       }
     };
 
     es.onerror = () => {
-      // A normal close after "done" also surfaces here; ignore if complete.
-      if (es.readyState === EventSource.CLOSED && !reconnectedRef.current) {
-        // attempt exactly one reconnect
-        reconnectedRef.current = true;
+      if (es.readyState === EventSource.CONNECTING) {
         setConnectionNote("Connection lost — reconnecting…");
-        es.close();
-        if (esRef.current === es) esRef.current = null;
-        setTimeout(() => {
-          if (batchIdRef.current === batchId) openStream(batchId);
-        }, 1000);
-      } else {
-        setConnectionNote(
-          "Connection lost. The batch may still be running on the server."
-        );
+      } else if (es.readyState === EventSource.CLOSED) {
+        setConnectionNote("Connection closed. Refresh to check the batch.");
       }
     };
   }, []);
@@ -139,7 +142,6 @@ export default function Page() {
     setValidationError(null);
     setPhase("submitting");
     setConnectionNote(null);
-    reconnectedRef.current = false;
 
     const fd = new FormData();
     products.forEach((p) => fd.append("products", p.file));
@@ -168,14 +170,13 @@ export default function Page() {
       // Optimistic seed so cards appear before the init event arrives.
       setJobs(
         products.map((p, i) => ({
-          id: String(i),
+          id: `local-${i}`,
           productName: p.file.name || `Product ${i + 1}`,
           status: "pending",
           attempts: 0,
         }))
       );
       setPhase("streaming");
-      batchIdRef.current = data.batchId;
       openStream(data.batchId);
     } catch (err) {
       setValidationError(
@@ -189,8 +190,6 @@ export default function Page() {
   const handleReset = () => {
     esRef.current?.close();
     esRef.current = null;
-    batchIdRef.current = null;
-    reconnectedRef.current = false;
     products.forEach((p) => URL.revokeObjectURL(p.url));
     references.forEach((r) => URL.revokeObjectURL(r.url));
     setProducts([]);
@@ -332,17 +331,6 @@ export default function Page() {
         </section>
       )}
 
-      {/* ───── Submission write-up (below the working app) ───── */}
-      <section className="mt-20 pt-12">
-        <div className="mb-8 flex items-center gap-4">
-          <span className="h-px flex-1 bg-gradient-to-r from-transparent via-violet-500/40 to-transparent" />
-          <p className="text-xs font-semibold uppercase tracking-[0.25em] text-violet-300">
-            About this submission
-          </p>
-          <span className="h-px flex-1 bg-gradient-to-r from-transparent via-violet-500/40 to-transparent" />
-        </div>
-        <SubmissionWriteup />
-      </section>
     </main>
   );
 }
