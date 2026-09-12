@@ -7,22 +7,29 @@ export const dynamic = "force-dynamic";
 
 export default function HomePage() {
   const recent = listBatches(8);
+  const imageToImage = Boolean(process.env.GEMINI_API_KEY);
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-12">
-      <header className="mb-10 animate-float-in">
-        <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] text-cyan-300 backdrop-blur">
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-cyan-400" />
-          Batch Creative
-        </div>
-        <h1 className="text-4xl font-black tracking-tight sm:text-5xl">
-          <span className="gradient-text">Products → styled social posts</span>
+      <section className="fade-up mb-10 max-w-2xl">
+        <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">
+          One reference. Every product. Same look.
         </h1>
-        <p className="mt-3 max-w-2xl text-sm text-slate-400 sm:text-base">
-          Drop in product shots and a reference image. Each product becomes a social post in the
-          reference&apos;s style, streamed to the page as it finishes.
+        <p className="mt-4 text-base text-ink-2 sm:text-lg">
+          Upload product photos and a reference image that sets the mood. Each product comes back as
+          a social post in that style, with a headline and caption, appearing on the page the moment
+          it&apos;s ready.
         </p>
-      </header>
+        {!imageToImage && (
+          <p className="mt-4 inline-flex items-start gap-2 rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn">
+            <span aria-hidden>⚠</span>
+            <span>
+              Running without <code className="font-mono">GEMINI_API_KEY</code>: posts are generated
+              from text only, so the uploaded pixels don&apos;t influence the result. Fine for a dry run.
+            </span>
+          </p>
+        )}
+      </section>
 
       <UploadForm maxProducts={maxProducts()} />
       <RecentBatches batches={recent} />

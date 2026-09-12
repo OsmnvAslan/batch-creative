@@ -2,125 +2,123 @@
 
 import type { ProductJob } from "@/lib/types";
 
-const CARD = "relative flex flex-col overflow-hidden rounded-2xl glass transition";
-
 function ProductThumb({ job }: { job: ProductJob }) {
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
       src={job.productImageUrl}
-      alt={`Original: ${job.productName}`}
+      alt={`Uploaded product: ${job.productName}`}
       title="Uploaded product"
-      className="absolute left-2 top-2 h-12 w-12 rounded-lg border border-white/20 bg-black/40 object-cover shadow-lg"
+      className="absolute left-3 top-3 h-12 w-12 rounded-md border border-white/70 bg-white object-cover shadow-md"
     />
+  );
+}
+
+function Attempts({ n }: { n: number }) {
+  if (n <= 1) return null;
+  return (
+    <span className="badge bg-black/55 text-white backdrop-blur" title="Generation attempts across providers">
+      {n} tries
+    </span>
   );
 }
 
 export default function ResultCard({ job }: { job: ProductJob }) {
   if (job.status === "failed") {
     return (
-      <div className={`${CARD} border border-rose-500/30`}>
-        <div className="relative flex aspect-square items-center justify-center bg-rose-500/5 p-4 text-center">
+      <article className="card overflow-hidden">
+        <div className="relative flex aspect-square items-center justify-center bg-danger-soft">
           <ProductThumb job={job} />
-          <span className="text-4xl text-rose-400/80">⚠</span>
+          <span className="text-3xl text-danger" aria-hidden>
+            ⚠
+          </span>
         </div>
         <div className="space-y-1 p-4">
-          <p className="truncate text-sm font-semibold text-slate-100" title={job.productName}>
+          <p className="truncate text-sm font-semibold" title={job.productName}>
             {job.productName}
           </p>
-          <p className="break-words text-xs text-rose-300">{job.error ?? "Generation failed"}</p>
-          <p className="font-mono text-[11px] text-rose-400/70">attempts: {job.attempts}</p>
+          <p className="break-words text-xs text-danger">{job.error ?? "Generation failed"}</p>
+          <p className="font-mono text-[11px] text-ink-3">attempts: {job.attempts}</p>
         </div>
-      </div>
+      </article>
     );
   }
 
   if (job.status === "done" && job.imageUrl) {
     return (
-      <div className={`${CARD} neon-border hover:glow-cyan`}>
-        <div className="relative aspect-square overflow-hidden">
+      <article className="card group overflow-hidden">
+        <div className="relative aspect-square overflow-hidden bg-ink/5">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={job.imageUrl}
             alt={job.headline ?? job.productName}
-            className="h-full w-full object-cover transition duration-700 hover:scale-105"
+            className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.02]"
           />
           <ProductThumb job={job} />
           {job.headline && (
-            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/35 to-transparent p-4 pt-10">
-              <p className="text-lg font-extrabold leading-tight text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.8)]">
-                {job.headline}
-              </p>
+            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent p-4 pt-12">
+              <p className="text-lg font-semibold leading-tight text-white drop-shadow">{job.headline}</p>
             </div>
           )}
-          <div className="absolute right-2 top-2 flex gap-1.5">
+          <div className="absolute right-3 top-3 flex gap-1.5">
             {job.provider && (
               <span
-                className="rounded-full border border-white/10 bg-black/60 px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wide text-cyan-200 backdrop-blur"
+                className="badge bg-black/55 text-white backdrop-blur"
                 title={
                   job.imageConditioned
                     ? "Generated from the product and reference pixels"
                     : "Generated from a text description only"
                 }
               >
-                {job.provider}
-                {job.imageConditioned ? " · img2img" : " · txt2img"}
+                {job.provider} · {job.imageConditioned ? "img2img" : "txt2img"}
               </span>
             )}
-            <span className="rounded-full border border-white/10 bg-black/60 px-2 py-0.5 font-mono text-[10px] font-medium text-slate-200 backdrop-blur">
-              {job.attempts} {job.attempts === 1 ? "try" : "tries"}
-            </span>
+            <Attempts n={job.attempts} />
           </div>
         </div>
         <div className="flex items-start justify-between gap-3 p-4">
-          <div className="min-w-0 space-y-1.5">
-            {job.caption && <p className="text-sm leading-snug text-slate-200">{job.caption}</p>}
-            <p className="truncate font-mono text-xs text-slate-500" title={job.productName}>
+          <div className="min-w-0 space-y-1">
+            {job.caption && <p className="text-sm leading-snug text-ink">{job.caption}</p>}
+            <p className="truncate font-mono text-xs text-ink-3" title={job.productName}>
               {job.productName}
             </p>
           </div>
           <a
             href={job.imageUrl}
             download={`${job.productName.replace(/\.[a-z0-9]+$/i, "")}-post`}
-            className="shrink-0 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-semibold text-slate-200 transition hover:border-cyan-400/50 hover:text-cyan-200"
-            title="Download"
+            className="btn btn-ghost shrink-0 px-3 py-1.5 text-xs"
+            title="Download image"
           >
-            ↓
+            Download
           </a>
         </div>
-      </div>
+      </article>
     );
   }
 
   const running = job.status === "running";
   return (
-    <div className={`${CARD} border border-white/10`}>
-      <div className="relative flex aspect-square items-center justify-center overflow-hidden bg-white/[0.02]">
-        <div className="absolute inset-0 shimmer opacity-60" />
-        {running && (
-          <div
-            className="absolute inset-x-0 h-16 bg-gradient-to-b from-transparent via-cyan-400/20 to-transparent"
-            style={{ animation: "scanline 1.8s ease-in-out infinite" }}
-          />
-        )}
+    <article className="card overflow-hidden">
+      <div className="relative flex aspect-square items-center justify-center overflow-hidden">
+        <div className="skeleton absolute inset-0" />
         <ProductThumb job={job} />
-        <div className="relative z-10 flex flex-col items-center gap-3">
+        <div className="relative flex flex-col items-center gap-3">
           {running ? (
-            <span className="h-8 w-8 animate-spin rounded-full border-2 border-violet-500/30 border-t-cyan-400" />
+            <span className="h-7 w-7 animate-spin rounded-full border-2 border-ink/15 border-t-accent" />
           ) : (
-            <span className="h-2.5 w-2.5 rounded-full bg-slate-500" />
+            <span className="h-2 w-2 rounded-full bg-ink-3" />
           )}
-          <span className="font-mono text-xs uppercase tracking-widest text-slate-400">
+          <span className="font-mono text-[11px] uppercase tracking-widest text-ink-3">
             {running ? "generating" : "queued"}
           </span>
         </div>
       </div>
       <div className="p-4">
-        <p className="truncate text-sm font-semibold text-slate-200" title={job.productName}>
+        <p className="truncate text-sm font-semibold" title={job.productName}>
           {job.productName}
         </p>
-        <p className="font-mono text-xs text-slate-500">{running ? "rendering…" : "in queue"}</p>
+        <p className="font-mono text-xs text-ink-3">{running ? "rendering…" : "waiting for a slot"}</p>
       </div>
-    </div>
+    </article>
   );
 }

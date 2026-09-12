@@ -83,6 +83,7 @@ export default function UploadForm({ maxProducts }: { maxProducts: number }) {
     <UploadArea
       products={products}
       references={references}
+      maxProducts={maxProducts}
       onAddProducts={addProducts}
       onAddReferences={addReferences}
       onRemoveProduct={removeAt(setProducts)}

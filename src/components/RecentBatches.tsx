@@ -4,28 +4,31 @@ import type { BatchSummary } from "@/lib/types";
 export default function RecentBatches({ batches }: { batches: BatchSummary[] }) {
   if (batches.length === 0) return null;
   return (
-    <section className="mt-14">
-      <h2 className="mb-4 text-sm font-semibold uppercase tracking-[0.2em] text-slate-400">Recent batches</h2>
+    <section className="mt-14 fade-up">
+      <h2 className="mb-4 text-sm font-semibold text-ink-2">Recent batches</h2>
       <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {batches.map((b) => (
           <li key={b.id}>
             <Link
               href={`/b/${b.id}`}
-              className="flex items-center gap-4 rounded-2xl glass p-3 transition hover:border-cyan-400/40"
+              className="card flex items-center gap-4 p-3 transition hover:border-line-strong"
             >
               <PreviewStrip urls={b.previewImageUrls.length ? b.previewImageUrls : b.referenceImageUrls} />
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-slate-100">
+                <p className="text-sm font-semibold">
                   {b.total} {b.total === 1 ? "product" : "products"}
-                  <span className="ml-2 font-mono text-xs font-normal text-slate-500">
+                  <span className="ml-2 font-mono text-xs font-normal text-ink-3">
                     {b.done} done{b.failed > 0 ? ` · ${b.failed} failed` : ""}
                   </span>
                 </p>
-                <p className="font-mono text-xs text-slate-500">
-                  {new Date(b.createdAt).toLocaleString()} ·{" "}
-                  <span className={b.status === "complete" ? "text-emerald-300" : "text-cyan-300"}>{b.status}</span>
+                <p className="font-mono text-xs text-ink-3">
+                  {new Date(b.createdAt).toLocaleString("en-GB")} ·{" "}
+                  <span className={b.status === "complete" ? "text-accent" : "text-warn"}>{b.status}</span>
                 </p>
               </div>
+              <span className="text-ink-3" aria-hidden>
+                →
+              </span>
             </Link>
           </li>
         ))}
@@ -43,7 +46,7 @@ function PreviewStrip({ urls }: { urls: string[] }) {
           key={u}
           src={u}
           alt=""
-          className="h-12 w-12 rounded-lg border border-white/15 bg-black/40 object-cover"
+          className="h-12 w-12 rounded-md border border-white bg-white object-cover shadow-sm"
           style={{ zIndex: 4 - i }}
         />
       ))}
