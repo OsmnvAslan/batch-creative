@@ -1,8 +1,9 @@
-// POST /api/batch — validate the upload, create the batch, start the work in the
-// background and return { batchId, productCount } immediately.
+// POST /api/batch — validate the upload, persist the batch, start the work in
+// the background and return { batchId, productCount } immediately.
 
 import { NextResponse } from "next/server";
 import { startBatch } from "@/lib/orchestrator";
+import { clientIp, globalLimiter } from "@/lib/ratelimit";
 import {
   validateCounts,
   validateImage,
@@ -22,6 +23,14 @@ async function readImages(files: File[], fallbackLabel: string): Promise<Uploade
 }
 
 export async function POST(req: Request) {
+  const limit = globalLimiter().check(clientIp(req));
+  if (!limit.allowed) {
+    return NextResponse.json(
+      { error: "Too many batches from this address. Try again in a few minutes." },
+      { status: 429, headers: { "Retry-After": String(Math.ceil(limit.retryAfterMs / 1000)) } },
+    );
+  }
+
   let form: FormData;
   try {
     form = await req.formData();

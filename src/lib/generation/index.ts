@@ -1,15 +1,17 @@
 import type { GenerateInput, GenerateResult, ImageProvider } from "@/lib/types";
 import { withBackoff } from "./retry";
+import { CircuitBreaker, globalBreaker } from "./breaker";
 import { GeminiImageProvider } from "./providers/gemini";
 import { PollinationsProvider } from "./providers/pollinations";
 import { TogetherProvider } from "./providers/together";
 import { MockProvider } from "./providers/mock";
 
-// Ordered provider chain with per-provider retries and failover.
+// Ordered provider chain with per-provider retries, failover and a circuit breaker.
 //
 //   for each provider in order:
+//     skip if its circuit is open
 //     try up to (1 + RETRIES) times with exponential backoff (retryable errors only)
-//     on exhaustion -> next provider
+//     on exhaustion -> record a breaker failure, move to the next provider
 //   if every provider fails -> GenerationError
 //
 // `attempts` is aggregated across all providers so the UI can show how hard a
@@ -52,6 +54,7 @@ export function providersFromEnv(env: Record<string, string | undefined> = proce
 
 export interface GenerateOptions {
   providers?: ImageProvider[];
+  breaker?: CircuitBreaker;
   retries?: number;
   baseMs?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -62,6 +65,7 @@ export async function generatePost(
   opts: GenerateOptions = {},
 ): Promise<GenerateResult> {
   const providers = opts.providers ?? providersFromEnv();
+  const breaker = opts.breaker ?? globalBreaker();
   if (providers.length === 0) {
     throw new GenerationError("No image providers configured", []);
   }
@@ -70,6 +74,10 @@ export async function generatePost(
   const failures: string[] = [];
 
   for (const provider of providers) {
+    if (!breaker.allows(provider.name)) {
+      failures.push(`${provider.name}: skipped (circuit open)`);
+      continue;
+    }
     try {
       const imageDataUrl = await withBackoff(() => provider.generate(input), {
         retries: opts.retries ?? RETRIES,
@@ -79,6 +87,7 @@ export async function generatePost(
           attempts++;
         },
       });
+      breaker.recordSuccess(provider.name);
       return {
         imageDataUrl,
         provider: provider.name,
@@ -86,6 +95,7 @@ export async function generatePost(
         attempts,
       };
     } catch (err) {
+      breaker.recordFailure(provider.name);
       const msg = err instanceof Error ? err.message : String(err);
       failures.push(`${provider.name}: ${msg}`);
     }

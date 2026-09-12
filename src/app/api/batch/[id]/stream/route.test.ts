@@ -3,7 +3,8 @@ import { createBatchStream, GET } from "./route";
 import { completeBatch, createBatch, resetStore, setStyle, updateJob } from "@/lib/store";
 import type { StreamEvent } from "@/lib/types";
 
-const job = (id: string) => ({ id, productName: `${id}.jpg`, status: "pending" as const, attempts: 0 });
+const img = (s: string) => ({ bytes: Buffer.from(s), mime: "image/jpeg" });
+const newBatch = () => createBatch({ products: [{ name: "a.jpg", image: img("a") }], references: [img("r")] });
 
 /** Read the whole stream and parse the SSE `data:` lines. */
 async function drain(stream: ReadableStream<Uint8Array>): Promise<StreamEvent[]> {
@@ -18,13 +19,13 @@ describe("batch SSE stream", () => {
   beforeEach(() => resetStore());
 
   it("sends init, then live events, then done and closes", async () => {
-    const batch = createBatch([job("a")]);
+    const batch = newBatch();
     const stream = createBatchStream(batch.id, new AbortController().signal);
     const reading = drain(stream);
 
     setStyle(batch.id, "fp");
-    updateJob(batch.id, "a", { status: "running" });
-    updateJob(batch.id, "a", { status: "done", imageDataUrl: "data:x", attempts: 1 });
+    updateJob(batch.id, batch.jobs[0].id, { status: "running" });
+    updateJob(batch.id, batch.jobs[0].id, { status: "done", image: img("x"), attempts: 1 });
     completeBatch(batch.id);
 
     const events = await reading;
@@ -33,9 +34,9 @@ describe("batch SSE stream", () => {
   });
 
   it("replays a full snapshot and done for a batch that already completed", async () => {
-    const batch = createBatch([job("a")]);
+    const batch = newBatch();
     setStyle(batch.id, "fp");
-    updateJob(batch.id, "a", { status: "done", imageDataUrl: "data:x", attempts: 1 });
+    updateJob(batch.id, batch.jobs[0].id, { status: "done", image: img("x"), attempts: 1 });
     completeBatch(batch.id);
 
     const events = await drain(createBatchStream(batch.id, new AbortController().signal));
@@ -44,7 +45,7 @@ describe("batch SSE stream", () => {
   });
 
   it("closes without events when the client aborts before init", async () => {
-    const batch = createBatch([job("a")]);
+    const batch = newBatch();
     const ac = new AbortController();
     ac.abort();
     const events = await drain(createBatchStream(batch.id, ac.signal));
@@ -52,13 +53,13 @@ describe("batch SSE stream", () => {
   });
 
   it("stops forwarding after the client aborts", async () => {
-    const batch = createBatch([job("a")]);
+    const batch = newBatch();
     const ac = new AbortController();
     const stream = createBatchStream(batch.id, ac.signal);
     const reading = drain(stream);
     setStyle(batch.id, "fp");
     ac.abort();
-    updateJob(batch.id, "a", { status: "running" });
+    updateJob(batch.id, batch.jobs[0].id, { status: "running" });
     const events = await reading;
     expect(events.map((e) => e.type)).toEqual(["init", "style"]);
   });
@@ -69,7 +70,7 @@ describe("batch SSE stream", () => {
     });
     expect(missing.status).toBe(404);
 
-    const batch = createBatch([job("a")]);
+    const batch = newBatch();
     completeBatch(batch.id);
     const res = await GET(new Request(`http://x/api/batch/${batch.id}/stream`), {
       params: Promise.resolve({ id: batch.id }),

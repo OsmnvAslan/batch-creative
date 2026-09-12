@@ -6,8 +6,10 @@ export type JobStatus = "pending" | "running" | "done" | "failed";
 export interface ProductJob {
   id: string;
   productName: string;
+  /** URL of the uploaded product image (served by /api/images). */
+  productImageUrl: string;
   status: JobStatus;
-  imageDataUrl?: string; // present iff status === "done"
+  imageUrl?: string; // generated post, present iff status === "done"
   headline?: string; // short post headline (done)
   caption?: string; // one-line post caption (done)
   provider?: string; // provider that produced the image (done)
@@ -24,8 +26,21 @@ export interface Batch {
   status: BatchStatus;
   /** Shared style descriptor derived from the references; empty while "preparing". */
   styleFingerprint: string;
+  referenceImageUrls: string[];
   jobs: ProductJob[];
   createdAt: number;
+}
+
+export interface BatchSummary {
+  id: string;
+  status: BatchStatus;
+  createdAt: number;
+  total: number;
+  done: number;
+  failed: number;
+  referenceImageUrls: string[];
+  /** Up to four generated post thumbnails for a preview strip. */
+  previewImageUrls: string[];
 }
 
 // ---- SSE events (GET /api/batch/[id]/stream) ----

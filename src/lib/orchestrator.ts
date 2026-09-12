@@ -5,9 +5,10 @@
 import { randomInt } from "node:crypto";
 import { buildStyleFingerprint, describeProduct, buildProductPrompt, writeCaption } from "@/lib/style";
 import { generatePost, GenerationError, type GenerateOptions } from "@/lib/generation";
-import { createBatch, setStyle, updateJob, completeBatch, newId } from "@/lib/store";
+import { createBatch, setStyle, updateJob, completeBatch } from "@/lib/store";
+import { parseDataUrl } from "@/lib/images";
 import { runPool, defaultConcurrency } from "@/lib/pool";
-import type { Batch, ProductJob } from "@/lib/types";
+import type { Batch } from "@/lib/types";
 import type { UploadedImage } from "@/lib/validation";
 
 export interface StartBatchInput {
@@ -28,7 +29,7 @@ export interface StartBatchOptions {
 }
 
 /**
- * Create the batch synchronously (so the caller can return its id at once) and
+ * Persist the batch synchronously (so the caller can return its id at once) and
  * kick off the work in the background. Returns the batch plus a promise that
  * resolves when the batch is complete (useful for tests; the route ignores it).
  */
@@ -41,14 +42,12 @@ export function startBatch(
   const captionFn = opts.deps?.writeCaption ?? writeCaption;
   const seed = opts.seed ?? randomInt(0, 2 ** 31);
 
-  const jobs: ProductJob[] = input.products.map((p) => ({
-    id: newId(),
-    productName: p.name,
-    status: "pending",
-    attempts: 0,
-  }));
-  const batch = createBatch(jobs);
   const references = input.references.map(({ bytes, mime }) => ({ bytes, mime }));
+  const batch = createBatch({
+    products: input.products.map((p) => ({ name: p.name, image: { bytes: p.bytes, mime: p.mime } })),
+    references,
+  });
+  const jobs = batch.jobs;
 
   const finished = (async () => {
     // Style fingerprint is computed here, not in the request handler, so the
@@ -78,14 +77,16 @@ export function startBatch(
         ]);
         updateJob(batch.id, job.id, {
           status: "done",
-          imageDataUrl: result.imageDataUrl,
+          image: parseDataUrl(result.imageDataUrl),
           headline: copy.headline,
           caption: copy.caption,
           provider: result.provider,
           imageConditioned: result.imageConditioned,
           attempts: result.attempts,
         });
+        job.status = "done";
       } catch (err) {
+        job.status = "failed";
         updateJob(batch.id, job.id, {
           status: "failed",
           attempts: err instanceof GenerationError ? countAttempts(err) : job.attempts,

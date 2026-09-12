@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { startBatch } from "./orchestrator";
 import { getBatch, resetStore, subscribe } from "./store";
 import { ProviderError } from "./generation/retry";
+import { CircuitBreaker } from "./generation/breaker";
+import { getImage } from "./store";
 import type { ImageProvider, StreamEvent } from "./types";
 import type { UploadedImage } from "./validation";
 
@@ -16,11 +18,18 @@ const deps = {
   })),
 };
 
+const dataUrl = (s: string) => `data:image/png;base64,${Buffer.from(s).toString("base64")}`;
+
 function provider(name: string, impl: (productName: string) => Promise<string>): ImageProvider {
   return { name, kind: "text-to-image", generate: vi.fn(({ product }) => impl(product.name)) };
 }
 
-const generate = { sleep: () => Promise.resolve(), baseMs: 1, retries: 1 };
+const generate = () => ({
+  sleep: () => Promise.resolve(),
+  baseMs: 1,
+  retries: 1,
+  breaker: new CircuitBreaker({ failureThreshold: 100 }),
+});
 
 describe("startBatch", () => {
   beforeEach(() => {
@@ -29,10 +38,10 @@ describe("startBatch", () => {
   });
 
   it("returns immediately in the preparing state, then runs every job to done", async () => {
-    const ok = provider("ok", async (n) => `data:${n}`);
+    const ok = provider("ok", async (n) => dataUrl(n));
     const { batch, finished } = startBatch(
       { products: [img("a.jpg"), img("b.jpg")], references: [img("ref.jpg")] },
-      { deps, generate: { ...generate, providers: [ok] } },
+      { deps, generate: { ...generate(), providers: [ok] } },
     );
 
     expect(batch.status).toBe("preparing");
@@ -46,8 +55,9 @@ describe("startBatch", () => {
     expect(done.status).toBe("complete");
     expect(done.styleFingerprint).toBe("warm daylight");
     expect(done.jobs.map((j) => j.status)).toEqual(["done", "done"]);
+    expect(done.jobs[0].imageUrl).toMatch(/^\/api\/images\//);
+    expect(getImage(done.jobs[0].imageUrl!.split("/").pop()!)?.bytes.toString()).toBe("a.jpg");
     expect(done.jobs[0]).toMatchObject({
-      imageDataUrl: "data:a.jpg",
       provider: "ok",
       imageConditioned: false,
       attempts: 1,
@@ -62,11 +72,11 @@ describe("startBatch", () => {
   it("isolates a failing product: siblings still complete and the batch finishes", async () => {
     const flaky = provider("flaky", async (n) => {
       if (n === "bad.jpg") throw new ProviderError("HTTP 500", { status: 500 });
-      return `data:${n}`;
+      return dataUrl(n);
     });
     const { batch, finished } = startBatch(
       { products: [img("good.jpg"), img("bad.jpg")], references: [img("ref.jpg")] },
-      { deps, generate: { ...generate, providers: [flaky] } },
+      { deps, generate: { ...generate(), providers: [flaky] } },
     );
     await finished;
 
@@ -96,10 +106,10 @@ describe("startBatch", () => {
   });
 
   it("passes the references, fingerprint and a shared seed to the provider", async () => {
-    const spy = provider("spy", async (n) => `data:${n}`);
+    const spy = provider("spy", async (n) => dataUrl(n));
     const { finished } = startBatch(
       { products: [img("a.jpg"), img("b.jpg")], references: [img("r1.jpg"), img("r2.jpg")] },
-      { deps, seed: 42, generate: { ...generate, providers: [spy] } },
+      { deps, seed: 42, generate: { ...generate(), providers: [spy] } },
     );
     await finished;
     const calls = (spy.generate as ReturnType<typeof vi.fn>).mock.calls.map(([i]) => i);
@@ -121,12 +131,12 @@ describe("startBatch", () => {
       peak = Math.max(peak, inFlight);
       await new Promise((r) => setTimeout(r, 5));
       inFlight--;
-      return `data:${n}`;
+      return dataUrl(n);
     });
     const products = Array.from({ length: 6 }, (_, i) => img(`p${i}.jpg`));
     const { finished } = startBatch(
       { products, references: [img("ref.jpg")] },
-      { deps, concurrency: 2, generate: { ...generate, providers: [slow] } },
+      { deps, concurrency: 2, generate: { ...generate(), providers: [slow] } },
     );
     await finished;
     expect(peak).toBe(2);
