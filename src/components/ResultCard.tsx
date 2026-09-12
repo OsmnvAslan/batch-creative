@@ -49,8 +49,16 @@ export default function ResultCard({ job }: { job: ProductJob }) {
           )}
           <div className="absolute right-2 top-2 flex gap-1.5">
             {job.provider && (
-              <span className="rounded-full border border-white/10 bg-black/60 px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wide text-cyan-200 backdrop-blur">
+              <span
+                className="rounded-full border border-white/10 bg-black/60 px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wide text-cyan-200 backdrop-blur"
+                title={
+                  job.imageConditioned
+                    ? "Generated from the product and reference pixels"
+                    : "Generated from a text description only"
+                }
+              >
                 {job.provider}
+                {job.imageConditioned ? " · img2img" : " · txt2img"}
               </span>
             )}
             <span className="rounded-full border border-white/10 bg-black/60 px-2 py-0.5 font-mono text-[10px] font-medium text-slate-200 backdrop-blur">

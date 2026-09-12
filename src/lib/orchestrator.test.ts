@@ -9,7 +9,7 @@ const img = (name: string): UploadedImage => ({ name, mime: "image/jpeg", bytes:
 
 const deps = {
   buildStyleFingerprint: vi.fn(async () => "warm daylight"),
-  describeProduct: vi.fn(async (_b: Buffer, name: string) => `a ${name}`),
+  describeProduct: vi.fn(async (_img: { bytes: Buffer; mime: string }, name: string) => `a ${name}`),
   writeCaption: vi.fn(async (_d: string, _f: string, name: string) => ({
     headline: name,
     caption: `Meet ${name}`,
@@ -17,7 +17,7 @@ const deps = {
 };
 
 function provider(name: string, impl: (productName: string) => Promise<string>): ImageProvider {
-  return { name, generate: vi.fn(({ productName }) => impl(productName)) };
+  return { name, kind: "text-to-image", generate: vi.fn(({ product }) => impl(product.name)) };
 }
 
 const generate = { sleep: () => Promise.resolve(), baseMs: 1, retries: 1 };
@@ -49,6 +49,7 @@ describe("startBatch", () => {
     expect(done.jobs[0]).toMatchObject({
       imageDataUrl: "data:a.jpg",
       provider: "ok",
+      imageConditioned: false,
       attempts: 1,
       headline: "a.jpg",
     });
@@ -92,6 +93,24 @@ describe("startBatch", () => {
     const done = getBatch(batch.id)!;
     expect(done.status).toBe("complete");
     expect(done.jobs[0]).toMatchObject({ status: "failed", error: "vision exploded" });
+  });
+
+  it("passes the references, fingerprint and a shared seed to the provider", async () => {
+    const spy = provider("spy", async (n) => `data:${n}`);
+    const { finished } = startBatch(
+      { products: [img("a.jpg"), img("b.jpg")], references: [img("r1.jpg"), img("r2.jpg")] },
+      { deps, seed: 42, generate: { ...generate, providers: [spy] } },
+    );
+    await finished;
+    const calls = (spy.generate as ReturnType<typeof vi.fn>).mock.calls.map(([i]) => i);
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call.seed).toBe(42);
+      expect(call.styleFingerprint).toBe("warm daylight");
+      expect(call.references.map((r: { bytes: Buffer }) => r.bytes.toString())).toEqual(["r1.jpg", "r2.jpg"]);
+    }
+    expect(calls[0].productDescription).toBe("a a.jpg");
+    expect(calls[0].stylePrompt).toContain("a a.jpg");
   });
 
   it("honours the concurrency limit", async () => {

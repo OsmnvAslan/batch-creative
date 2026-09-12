@@ -2,6 +2,7 @@
 // a concurrency-limited pool. Every job is isolated: a failure marks that job
 // "failed" and never affects its siblings. The batch always reaches "complete".
 
+import { randomInt } from "node:crypto";
 import { buildStyleFingerprint, describeProduct, buildProductPrompt, writeCaption } from "@/lib/style";
 import { generatePost, GenerationError, type GenerateOptions } from "@/lib/generation";
 import { createBatch, setStyle, updateJob, completeBatch, newId } from "@/lib/store";
@@ -16,6 +17,7 @@ export interface StartBatchInput {
 
 export interface StartBatchOptions {
   concurrency?: number;
+  seed?: number;
   generate?: GenerateOptions;
   /** Injectable for tests. */
   deps?: Partial<{
@@ -37,6 +39,7 @@ export function startBatch(
   const fingerprintFn = opts.deps?.buildStyleFingerprint ?? buildStyleFingerprint;
   const describeFn = opts.deps?.describeProduct ?? describeProduct;
   const captionFn = opts.deps?.writeCaption ?? writeCaption;
+  const seed = opts.seed ?? randomInt(0, 2 ** 31);
 
   const jobs: ProductJob[] = input.products.map((p) => ({
     id: newId(),
@@ -45,22 +48,30 @@ export function startBatch(
     attempts: 0,
   }));
   const batch = createBatch(jobs);
+  const references = input.references.map(({ bytes, mime }) => ({ bytes, mime }));
 
   const finished = (async () => {
     // Style fingerprint is computed here, not in the request handler, so the
     // POST returns immediately even when the vision call is slow.
-    const fingerprint = await fingerprintFn(input.references.map((r) => r.bytes));
+    const fingerprint = await fingerprintFn(references);
     setStyle(batch.id, fingerprint);
 
     await runPool(input.products, opts.concurrency ?? defaultConcurrency(), async (product, i) => {
       const job = jobs[i];
       updateJob(batch.id, job.id, { status: "running" });
       try {
-        const description = await describeFn(product.bytes, product.name);
+        const description = await describeFn(product, product.name);
         const prompt = buildProductPrompt(fingerprint, description);
         const [result, copy] = await Promise.all([
           generatePost(
-            { productImage: product.bytes, productName: product.name, stylePrompt: prompt },
+            {
+              product: { name: product.name, bytes: product.bytes, mime: product.mime },
+              references,
+              styleFingerprint: fingerprint,
+              productDescription: description,
+              stylePrompt: prompt,
+              seed,
+            },
             opts.generate,
           ),
           captionFn(description, fingerprint, product.name),
@@ -71,6 +82,7 @@ export function startBatch(
           headline: copy.headline,
           caption: copy.caption,
           provider: result.provider,
+          imageConditioned: result.imageConditioned,
           attempts: result.attempts,
         });
       } catch (err) {

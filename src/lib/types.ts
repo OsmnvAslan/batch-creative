@@ -11,6 +11,8 @@ export interface ProductJob {
   headline?: string; // short post headline (done)
   caption?: string; // one-line post caption (done)
   provider?: string; // provider that produced the image (done)
+  /** True when the provider saw the actual product + reference pixels (image-to-image). */
+  imageConditioned?: boolean;
   attempts: number; // total generation attempts across providers
   error?: string; // present iff status === "failed"
 }
@@ -34,20 +36,38 @@ export type StreamEvent =
   | { type: "done"; batchId: string };
 
 // ---- Generation module ----
+export interface ImageBytes {
+  bytes: Buffer;
+  mime: string;
+}
+
 export interface GenerateInput {
-  productImage: Buffer;
-  productName: string;
+  product: ImageBytes & { name: string };
+  /** 1–2 reference images that define the target style. */
+  references: ImageBytes[];
+  /** Shared style description (identical for every product in the batch). */
+  styleFingerprint: string;
+  /** What this product is, in words. */
+  productDescription: string;
+  /** Full text prompt (fingerprint + subject) for text-only providers. */
   stylePrompt: string;
+  /** Per-batch seed shared by all products, for reproducibility/coherence. */
+  seed: number;
 }
 
 export interface GenerateResult {
   imageDataUrl: string;
   provider: string;
+  imageConditioned: boolean;
   attempts: number;
 }
 
+export type ProviderKind = "image-to-image" | "text-to-image";
+
 export interface ImageProvider {
   readonly name: string;
+  /** Whether the provider consumes the uploaded pixels or only the text prompt. */
+  readonly kind: ProviderKind;
   /** Returns an image data URL, or throws (ideally a ProviderError). */
   generate(input: GenerateInput): Promise<string>;
 }

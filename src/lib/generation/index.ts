@@ -1,5 +1,6 @@
 import type { GenerateInput, GenerateResult, ImageProvider } from "@/lib/types";
 import { withBackoff } from "./retry";
+import { GeminiImageProvider } from "./providers/gemini";
 import { PollinationsProvider } from "./providers/pollinations";
 import { TogetherProvider } from "./providers/together";
 import { MockProvider } from "./providers/mock";
@@ -27,14 +28,21 @@ export class GenerationError extends Error {
 }
 
 /**
- * Provider chain from the environment:
- *   pollinations (keyless) -> together (if TOGETHER_API_KEY) -> mock (if ENABLE_MOCK_PROVIDER)
+ * Provider chain from the environment, best first:
+ *   gemini (image-to-image, if GEMINI_API_KEY)
+ *   -> pollinations (keyless text-to-image)
+ *   -> together (text-to-image, if TOGETHER_API_KEY)
+ *   -> mock (offline placeholder, if ENABLE_MOCK_PROVIDER)
  *
  * The mock provider is opt-in so that, by default, a product whose real providers
  * all fail is reported as *failed* rather than silently replaced by a placeholder.
  */
 export function providersFromEnv(env: Record<string, string | undefined> = process.env): ImageProvider[] {
-  const providers: ImageProvider[] = [new PollinationsProvider()];
+  const providers: ImageProvider[] = [];
+  if (env.GEMINI_API_KEY) {
+    providers.push(new GeminiImageProvider({ apiKey: env.GEMINI_API_KEY, model: env.GEMINI_IMAGE_MODEL }));
+  }
+  providers.push(new PollinationsProvider());
   if (env.TOGETHER_API_KEY) providers.push(new TogetherProvider(env.TOGETHER_API_KEY));
   if (env.ENABLE_MOCK_PROVIDER === "true" || env.ENABLE_MOCK_PROVIDER === "1") {
     providers.push(new MockProvider());
@@ -71,15 +79,17 @@ export async function generatePost(
           attempts++;
         },
       });
-      return { imageDataUrl, provider: provider.name, attempts };
+      return {
+        imageDataUrl,
+        provider: provider.name,
+        imageConditioned: provider.kind === "image-to-image",
+        attempts,
+      };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       failures.push(`${provider.name}: ${msg}`);
     }
   }
 
-  throw new GenerationError(
-    `All providers failed after ${attempts} attempt(s)`,
-    failures,
-  );
+  throw new GenerationError(`All providers failed after ${attempts} attempt(s)`, failures);
 }

@@ -8,6 +8,7 @@ const MODEL = "black-forest-labs/FLUX.1-schnell";
 
 export class TogetherProvider implements ImageProvider {
   readonly name = "together";
+  readonly kind = "text-to-image" as const;
 
   constructor(private readonly apiKey: string) {}
 

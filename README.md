@@ -21,17 +21,20 @@ npm start          # serves on http://localhost:3000
 Then open http://localhost:3000, add product images + a reference, hit **Generate
 posts**, and watch cards fill in progressively.
 
-> **Runs out of the box with no API keys.** The primary image provider
-> (Pollinations) is keyless. Without any keys you still get real generated images
-> plus a working failover path (see below).
+> **Set `GEMINI_API_KEY` for the real thing.** With it, the product and reference
+> pixels go to an image-to-image model and the same key drives captioning and copy.
+> Without any keys the app still runs end to end on Pollinations (keyless
+> text-to-image), but then the uploaded pixels are not used: the style is a fixed
+> template and the subject comes from the product filename. Treat keyless mode as a
+> dry run of the pipeline, not as output.
 
 ### Optional environment (`.env` — see `.env.example`)
 
 | Var | Default | Effect |
 |-----|---------|--------|
-| `OPENROUTER_API_KEY` | _(unset)_ | Enables **vision** captioning of references + products (OpenRouter). Without it, a deterministic style template + generic product descriptor are used. |
-| `OPENROUTER_VISION_MODEL` | `nvidia/nemotron-nano-12b-v2-vl:free` | Vision model id on OpenRouter. |
-| `TOGETHER_API_KEY` | _(unset)_ | Adds Together AI FLUX as a second image provider for failover. |
+| `GEMINI_API_KEY` | _(unset)_ | **Primary.** Image-to-image generation (`gemini-3.1-flash-image`) + vision captioning and copywriting (`gemini-3.5-flash-lite`). Override models with `GEMINI_IMAGE_MODEL` / `GEMINI_TEXT_MODEL`. |
+| `OPENROUTER_API_KEY` | _(unset)_ | Alternative vision/copy client when no Gemini key is set (`OPENROUTER_VISION_MODEL`, default `nvidia/nemotron-nano-12b-v2-vl:free`). |
+| `TOGETHER_API_KEY` | _(unset)_ | Adds Together AI FLUX as another text-to-image provider after Pollinations. |
 | `ENABLE_MOCK_PROVIDER` | `false` | Appends an offline placeholder provider to the chain (demo / tests). |
 | `MAX_PRODUCTS` / `MAX_FILE_BYTES` | `12` / `10 MB` | Upload limits. |
 | `MAX_CONCURRENCY` | `3` | Max products generated at once (fan-out pool limit). |
@@ -64,9 +67,11 @@ Browser ◄──SSE /api/batch/[id]/stream (init → job* → done)────
   **once** and reused **verbatim** for every product. `describeProduct` supplies the
   per-product subject. Same style spine, different subject per card.
 - **Reliability**: each product is generated via an ordered provider list
-  (`pollinations → together? → mock?`); each provider gets retries with exponential
-  backoff + jitter; on exhaustion it fails over to the next. One product (or
-  provider) failing never stops the others — the batch always reaches `complete`.
+  (`gemini? → pollinations → together? → mock?`); each provider gets retries with
+  exponential backoff + jitter on transient errors only; on exhaustion it fails over
+  to the next. One product (or provider) failing never stops the others — the batch
+  always reaches `complete`. Each card shows which provider produced it and whether
+  it was image-conditioned (`img2img`) or text-only (`txt2img`).
 - **Progressive delivery**: Server-Sent Events. The POST returns immediately with a
   `batchId`; the client subscribes to the stream and renders each result as its job
   flips to a terminal state.

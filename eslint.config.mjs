@@ -7,6 +7,14 @@ const config = [
   {
     ignores: [".next/**", "node_modules/**", "coverage/**"],
   },
+  {
+    rules: {
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrors: "none" },
+      ],
+    },
+  },
 ];
 
 export default config;

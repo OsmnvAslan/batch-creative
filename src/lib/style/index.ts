@@ -1,19 +1,15 @@
-// Style agent — public module (PLAN.md §4.4, §7).
+// Style module: turns the uploaded images into text the generators can use.
 //
-// Two decoupled axes, combined per job:
-//   1. buildStyleFingerprint(references) — the SHARED style spine (consistency axis).
-//      Computed ONCE per batch, reused VERBATIM for all N products.
-//   2. describeProduct(productImage)     — what THIS product is (per-product axis).
-//      Computed once per product, so each card is about its own subject.
-// buildProductPrompt glues them: fingerprint stays verbatim, product description is
-// the only variable slot.
+//   buildStyleFingerprint(references) — ONE shared style description per batch.
+//   describeProduct(product)          — what each product is (per product).
+//   writeCaption(...)                 — headline + caption per product.
+//   buildProductPrompt(fp, desc)      — text prompt for text-only providers.
 //
-// Both vision calls use the SAME OpenRouter model behind one OPENROUTER_API_KEY.
-// On ANY failure (no key / HTTP error / timeout / empty) these functions NEVER throw
-// — they degrade to the deterministic fallbacks in ./fallback so the pipeline always
-// runs. See PLAN.md §7/§8 (documented scope cut).
+// Every function degrades to a deterministic fallback when no vision client is
+// configured or the call fails, so the pipeline always runs.
 
-import { visionCaption, textCompletion } from "./openrouter";
+import type { ImageBytes } from "@/lib/types";
+import { visionClientFromEnv, type VisionClient } from "@/lib/vision";
 import {
   FALLBACK_FINGERPRINT,
   FALLBACK_PRODUCT_DESCRIPTION,
@@ -21,9 +17,6 @@ import {
   subjectFromName,
 } from "./fallback";
 
-// Instruction sent for the shared style spine. We explicitly ask for ONLY
-// transferable style attributes and to exclude the specific objects, so the
-// fingerprint can be reused across different products.
 const FINGERPRINT_INSTRUCTION =
   "You are a visual style analyst. Look at the reference image(s) and synthesize ONE " +
   "shared visual style as a single compact paragraph (about 40 words). Describe ONLY " +
@@ -31,94 +24,89 @@ const FINGERPRINT_INSTRUCTION =
   "and lens/depth of field. Do NOT name or describe any specific objects, products, " +
   "or subjects. Output the paragraph only, no preamble.";
 
-// Instruction sent per product. We want only the subject identity, no style/background.
 const PRODUCT_INSTRUCTION =
   "Identify the main product in this image. Reply with a SHORT phrase (under 12 words) " +
   "naming the product and its key visual traits: color, material, and form. Do NOT " +
   "describe the background, lighting, or photographic style. Output the phrase only.";
 
-/**
- * Build ONE shared style fingerprint from reference image(s). Called ONCE per batch.
- * Degrades to a fixed deterministic template on any failure → uniform style.
- */
-export async function buildStyleFingerprint(
-  references: Buffer[]
-): Promise<string> {
-  if (!references || references.length === 0) return FALLBACK_FINGERPRINT;
-  try {
-    const caption = await visionCaption(FINGERPRINT_INSTRUCTION, references);
-    return caption || FALLBACK_FINGERPRINT;
-  } catch {
-    return FALLBACK_FINGERPRINT;
-  }
-}
-
-/**
- * Describe ONE product image. Called once per product job.
- * Prefers a vision caption; on any failure (no key / quota / timeout) it degrades
- * to a subject derived from the product's filename, so the generated image is still
- * about the right object. Only falls to a fully generic descriptor when the
- * filename is noise too.
- */
-export async function describeProduct(
-  productImage: Buffer,
-  productName: string
-): Promise<string> {
-  const fallback = subjectFromName(productName);
-  if (!productImage) return fallback;
-  try {
-    const caption = await visionCaption(PRODUCT_INSTRUCTION, [productImage]);
-    return caption || fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-// Instruction for the social copy. We want a real post's text: a short punchy
-// headline + a single caption line, in the mood implied by the shared style.
 const CAPTION_INSTRUCTION =
   "You write social media copy for a product post. Given the product and the visual " +
   "mood, write a punchy HEADLINE (2-4 words, Title Case) and a single CAPTION line " +
   "(under 12 words, friendly, no hashtags). Reply as strict JSON: " +
   '{"headline": "...", "caption": "..."}. No preamble, JSON only.';
 
+export interface StyleOptions {
+  /** Injectable for tests; defaults to the env-selected client (may be undefined). */
+  vision?: VisionClient | null;
+}
+
+function client(opts: StyleOptions): VisionClient | undefined {
+  if (opts.vision === null) return undefined;
+  return opts.vision ?? visionClientFromEnv();
+}
+
+/** Build ONE shared style fingerprint from the reference image(s). */
+export async function buildStyleFingerprint(
+  references: ImageBytes[],
+  opts: StyleOptions = {},
+): Promise<string> {
+  const vision = client(opts);
+  if (!vision || references.length === 0) return FALLBACK_FINGERPRINT;
+  try {
+    return (await vision.caption(FINGERPRINT_INSTRUCTION, references)) || FALLBACK_FINGERPRINT;
+  } catch {
+    return FALLBACK_FINGERPRINT;
+  }
+}
+
 /**
- * Write short social copy (headline + caption) for one product. Called once per job.
- * Uses the same OpenRouter model (text-only here). Degrades to deterministic copy.
+ * Describe ONE product image. Falls back to a subject derived from the filename
+ * so the text prompt is still about the right object, then to a generic phrase.
  */
+export async function describeProduct(
+  product: ImageBytes,
+  productName: string,
+  opts: StyleOptions = {},
+): Promise<string> {
+  const fallback = subjectFromName(productName);
+  const vision = client(opts);
+  if (!vision) return fallback;
+  try {
+    return (await vision.caption(PRODUCT_INSTRUCTION, [product])) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** Headline + caption for one product. Deterministic copy when no LLM is available. */
 export async function writeCaption(
   productDescription: string,
   fingerprint: string,
-  productName: string
+  productName: string,
+  opts: StyleOptions = {},
 ): Promise<{ headline: string; caption: string }> {
-  const prompt =
-    `${CAPTION_INSTRUCTION}\n\nProduct: ${productDescription}\nVisual mood: ${fingerprint}`;
-  try {
-    const raw = await textCompletion(prompt);
-    const parsed = parseCopy(raw);
-    if (parsed) return parsed;
-  } catch {
-    // fall through to deterministic copy
+  const vision = client(opts);
+  if (vision) {
+    try {
+      const raw = await vision.complete(
+        `${CAPTION_INSTRUCTION}\n\nProduct: ${productDescription}\nVisual mood: ${fingerprint}`,
+      );
+      const parsed = parseCopy(raw);
+      if (parsed) return parsed;
+    } catch {
+      /* fall through */
+    }
   }
   return fallbackCopy(productName, productDescription);
 }
 
-function parseCopy(
-  raw: string
-): { headline: string; caption: string } | undefined {
-  if (!raw) return undefined;
-  // Tolerate code fences / stray text around the JSON.
-  const match = raw.match(/\{[\s\S]*\}/);
+export function parseCopy(raw: string): { headline: string; caption: string } | undefined {
+  const match = raw?.match(/\{[\s\S]*\}/);
   if (!match) return undefined;
   try {
-    const obj = JSON.parse(match[0]) as {
-      headline?: unknown;
-      caption?: unknown;
-    };
+    const obj = JSON.parse(match[0]) as { headline?: unknown; caption?: unknown };
     const headline = typeof obj.headline === "string" ? obj.headline.trim() : "";
     const caption = typeof obj.caption === "string" ? obj.caption.trim() : "";
-    // Require BOTH fields — a half-parsed object (e.g. only a headline) would render
-    // a post with a missing caption line. Better to fall back to deterministic copy.
     if (!headline || !caption) return undefined;
     return { headline: headline.slice(0, 40), caption: caption.slice(0, 120) };
   } catch {
@@ -126,17 +114,9 @@ function parseCopy(
   }
 }
 
-/**
- * Compose the final per-product prompt: shared fingerprint (VERBATIM) + this
- * product's description in the variable slot. Same spine, different subject per card.
- */
-export function buildProductPrompt(
-  fingerprint: string,
-  productDescription: string
-): string {
-  const subject =
-    (productDescription && productDescription.trim()) ||
-    FALLBACK_PRODUCT_DESCRIPTION;
-  const spine = (fingerprint && fingerprint.trim()) || FALLBACK_FINGERPRINT;
+/** Text prompt for text-only providers: shared spine verbatim + this product's subject. */
+export function buildProductPrompt(fingerprint: string, productDescription: string): string {
+  const subject = productDescription?.trim() || FALLBACK_PRODUCT_DESCRIPTION;
+  const spine = fingerprint?.trim() || FALLBACK_FINGERPRINT;
   return `${subject}, presented as a social media product post. ${spine} High quality, professional, cohesive set.`;
 }

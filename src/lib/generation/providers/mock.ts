@@ -28,9 +28,10 @@ export function mockSvg(productName: string): string {
 
 export class MockProvider implements ImageProvider {
   readonly name = "mock";
+  readonly kind = "text-to-image" as const;
 
   async generate(input: GenerateInput): Promise<string> {
-    const svg = mockSvg(input.productName);
+    const svg = mockSvg(input.product.name);
     return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
   }
 }

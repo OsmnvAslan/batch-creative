@@ -4,13 +4,16 @@ import { GenerationError, generatePost, providersFromEnv } from "./index";
 import { ProviderError } from "./retry";
 
 const input: GenerateInput = {
-  productImage: Buffer.from(""),
-  productName: "sneaker.jpg",
-  stylePrompt: "a sneaker",
+  product: { name: "sneaker.jpg", bytes: Buffer.from(""), mime: "image/jpeg" },
+  references: [],
+  styleFingerprint: "warm light",
+  productDescription: "a sneaker",
+  stylePrompt: "a sneaker, warm light",
+  seed: 7,
 };
 
-function provider(name: string, impl: () => Promise<string>): ImageProvider {
-  return { name, generate: vi.fn(impl) };
+function provider(name: string, impl: () => Promise<string>, kind: ImageProvider["kind"] = "text-to-image"): ImageProvider {
+  return { name, kind, generate: vi.fn(impl) };
 }
 
 const flaky = (failures: number, status: number, result = "data:ok") => {
@@ -28,8 +31,14 @@ describe("generatePost", () => {
     const a = provider("a", async () => "data:a");
     const b = provider("b", async () => "data:b");
     const res = await generatePost(input, { ...opts, providers: [a, b] });
-    expect(res).toEqual({ imageDataUrl: "data:a", provider: "a", attempts: 1 });
+    expect(res).toEqual({ imageDataUrl: "data:a", provider: "a", imageConditioned: false, attempts: 1 });
     expect(b.generate).not.toHaveBeenCalled();
+  });
+
+  it("flags results from an image-to-image provider", async () => {
+    const a = provider("gemini", async () => "data:a", "image-to-image");
+    const res = await generatePost(input, { ...opts, providers: [a] });
+    expect(res.imageConditioned).toBe(true);
   });
 
   it("retries a transient failure on the same provider before failing over", async () => {
@@ -82,10 +91,12 @@ describe("providersFromEnv", () => {
     expect(providersFromEnv({}).map((p) => p.name)).toEqual(["pollinations"]);
   });
 
-  it("adds together with a key and mock when enabled", () => {
-    const names = providersFromEnv({ TOGETHER_API_KEY: "k", ENABLE_MOCK_PROVIDER: "true" }).map(
-      (p) => p.name,
-    );
-    expect(names).toEqual(["pollinations", "together", "mock"]);
+  it("puts gemini first with a key, then together and mock when enabled", () => {
+    const names = providersFromEnv({
+      GEMINI_API_KEY: "g",
+      TOGETHER_API_KEY: "k",
+      ENABLE_MOCK_PROVIDER: "true",
+    }).map((p) => p.name);
+    expect(names).toEqual(["gemini", "pollinations", "together", "mock"]);
   });
 });

@@ -2,7 +2,8 @@ import type { GenerateInput, ImageProvider } from "@/lib/types";
 import { ProviderError } from "../retry";
 import { fetchWithTimeout, stableSeed } from "./shared";
 
-// Pollinations.ai — keyless text->image. Primary provider on the free path.
+// Pollinations.ai — keyless text->image. Sees only the text prompt, so it is the
+// fallback when no image-to-image provider is configured or all of them failed.
 // Slow under load (18–46s observed), hence the generous timeout.
 const TIMEOUT_MS = 90_000;
 const SIZE = 768;
@@ -22,18 +23,18 @@ function forcedFailNames(env: Record<string, string | undefined>): Set<string> {
 
 export class PollinationsProvider implements ImageProvider {
   readonly name = "pollinations";
+  readonly kind = "text-to-image" as const;
 
   async generate(input: GenerateInput): Promise<string> {
-    if (forcedFailNames(process.env).has(input.productName)) {
-      throw new ProviderError(
-        `forced failure via GEN_FORCE_FAIL for "${input.productName}"`,
-        { retryable: false },
-      );
+    if (forcedFailNames(process.env).has(input.product.name)) {
+      throw new ProviderError(`forced failure via GEN_FORCE_FAIL for "${input.product.name}"`, {
+        retryable: false,
+      });
     }
 
-    // Seed off name + full prompt so products with similar filenames but
-    // different descriptions do not collide on the same image.
-    const seed = stableSeed(`${input.productName}::${input.stylePrompt}`);
+    // Batch seed mixed with the prompt: reproducible per product, no collisions
+    // between products whose descriptions differ.
+    const seed = stableSeed(`${input.seed}::${input.stylePrompt}`);
     const url =
       `https://image.pollinations.ai/prompt/${encodeURIComponent(input.stylePrompt)}` +
       `?width=${SIZE}&height=${SIZE}&nologo=true&seed=${seed}`;

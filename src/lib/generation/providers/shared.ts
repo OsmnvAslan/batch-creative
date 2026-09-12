@@ -8,26 +8,27 @@ export function stableSeed(s: string): number {
 }
 
 /**
- * fetch() with an abort timeout. A timeout surfaces as a retryable ProviderError
- * so the retry loop treats it as transient.
+ * fetch() with an abort timeout. A timeout or socket failure surfaces as a
+ * retryable ProviderError so the retry loop treats it as transient.
  */
 export async function fetchWithTimeout(
   url: string,
   init: RequestInit,
   timeoutMs: number,
+  fetchImpl: typeof fetch = fetch,
 ): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    return await fetchImpl(url, { ...init, signal: controller.signal });
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
       throw new ProviderError(`timed out after ${timeoutMs}ms`, { retryable: true, cause: err });
     }
-    throw new ProviderError(
-      err instanceof Error ? err.message : String(err),
-      { retryable: true, cause: err },
-    );
+    throw new ProviderError(err instanceof Error ? err.message : String(err), {
+      retryable: true,
+      cause: err,
+    });
   } finally {
     clearTimeout(timer);
   }
